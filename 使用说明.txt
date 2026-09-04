@@ -1,0 +1,59 @@
+⭐ 悬浮翻译小星星 - 使用说明
+
+【文件说明】
+悬浮翻译小星星.exe  (35MB, 单文件绿色版, 无需安装Python)
+main.py            (源码，Python可直接运行)
+dist/悬浮翻译小星星.exe (同上，打包输出目录)
+
+【使用方法】
+1. 双击 悬浮翻译小星星.exe
+   - 右上角会弹出 "⭐ 悬浮翻译已启动" 提示（3.5秒后消失）
+   - 系统托盘会出现黄色星星图标（需安装 pystray，打包版已包含）
+
+2. 去任意地方选中文字（浏览器、Word、微信、PDF等）
+   - 拖动选中一段英文或中文
+   - 鼠标左下角会淡入一个小五角星（36x36，带阴影和弹跳）
+
+3. 点击小五角星
+   - 在选中文字正上方弹出翻译卡片
+   - 自动识别：含中文→译英文，无中文→译中文
+   - 显示原文（灰底）+ 译文（黑色加粗）
+
+4. 卡片操作
+   - ⇄ 切换：中英方向互换
+   - 📋 复制译文：复制到剪贴板
+   - 🔊 朗读：调用 Windows SAPI 朗读
+   - 拖动标题栏可移动卡片
+   - ESC 或点击空白处关闭
+   - 滚动鼠标滚轮自动隐藏星星
+
+【退出】
+- 右键托盘图标 → 退出
+- 或 任务管理器结束 "悬浮翻译小星星.exe"
+
+【常见问题】
+- 选中没反应？
+  → 请以管理员身份运行（右键 exe → 以管理员身份运行），部分软件会拦截剪贴板
+  → 确保真正拖选了文字（有蓝色背景），不是单击
+
+- 翻译失败？
+  → 检查网络，程序会自动从 Google 切换到 MyMemory 备用接口
+  → 首次翻译稍慢（1-2秒），属正常
+
+- 杀毒软件报毒？
+  → PyInstaller 打包的单文件 exe 偶尔误报，添加白名单即可，源码在 main.py 可自行审查
+
+- 开机自启？
+  → 按 Win+R 输入 shell:startup 回车，把 exe 快捷方式放进去
+
+【源码运行】
+pip install -r requirements.txt
+python main.py
+
+【重新打包】
+pip install pyinstaller pystray Pillow
+pyinstaller --noconsole --onefile --name "悬浮翻译小星星" --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --collect-all="pynput" --collect-all="pystray" --collect-all="PIL" main.py
+
+工作目录：C:\Users\Administrator\Documents\Default Project\悬浮翻译小星星
+打包时间：见 exe 文件时间
+版本：v1.0 Python 3.12 + PyInstaller 6.22

@@ -1,0 +1,18 @@
+# exe / 打包产物（走 GitHub Release，不进 git）
+*.exe
+dist/
+build/
+*.spec
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 系统
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,59 +1,82 @@
-⭐ 悬浮翻译小星星 - 使用说明
+🐮 小袁翻译 - 使用说明（v1.0）
 
 【文件说明】
-悬浮翻译小星星.exe  (35MB, 单文件绿色版, 无需安装Python)
-main.py            (源码，Python可直接运行)
-dist/悬浮翻译小星星.exe (同上，打包输出目录)
+小袁翻译.exe / XiaoYuanTranslator-v1.0.0.exe（21MB，单文件绿色版，无需安装Python）
+  ※ GitHub Release 下载的文件名是英文版，两者内容完全一样
+main.py            （源码，Python 可直接运行）
+niulai.png         （牛来头像，换同名图即可自定义）
+dist/              （打包输出目录）
 
 【使用方法】
-1. 双击 悬浮翻译小星星.exe
-   - 右上角会弹出 "⭐ 悬浮翻译已启动" 提示（3.5秒后消失）
-   - 系统托盘会出现黄色星星图标（需安装 pystray，打包版已包含）
+1. 双击 exe（首次启动等 5~10 秒，单文件需解包）
+   - 右上角弹出 "🐮 小袁翻译已启动" 提示（3.5 秒后消失）
+   - 系统托盘出现牛来图标
 
-2. 去任意地方选中文字（浏览器、Word、微信、PDF等）
-   - 拖动选中一段英文或中文
-   - 鼠标左下角会淡入一个小五角星（36x36，带阴影和弹跳）
+2. 悬浮翻译：去任意地方选中文字（浏览器、Word、微信、PDF等）
+   - 拖动或双击选中一段文字
+   - 鼠标左下角淡出牛来头像（56px，4 秒无操作自动消失）
 
-3. 点击小五角星
+3. 点击牛来
    - 在选中文字正上方弹出翻译卡片
-   - 自动识别：含中文→译英文，无中文→译中文
-   - 显示原文（灰底）+ 译文（黑色加粗）
+   - 默认自动检测 → 中文；顶部下拉可换 28 种语言任意互译
+   - 显示原文 + 译文，另有音标 / 简明释义 / 双语例句（短词才有）
 
 4. 卡片操作
-   - ⇄ 切换：中英方向互换
+   - ⇄：源/目标语言互换
    - 📋 复制译文：复制到剪贴板
-   - 🔊 朗读：调用 Windows SAPI 朗读
-   - 拖动标题栏可移动卡片
-   - ESC 或点击空白处关闭
-   - 滚动鼠标滚轮自动隐藏星星
+   - 🔊 原文 / 🔊 译文：分别朗读（本地嗓音→在线语音→装包指引）
+   - 🔁 重试：仅翻译失败时出现
+   - 拖动标题栏可移动卡片；ESC / 点空白 / 滚轮关闭
+   - 朗读中关卡片会自动停读
+
+5. 主窗口（词典式自主互译）
+   - 右键托盘 → 打开主窗口（双击托盘也行）
+   - 输入文字，Ctrl+Enter 翻译；有音标、简明/例句选项卡、历史 30 条（双击重查）
+   - 建桌面快捷方式并在目标后加 " --main"，双击直进主窗口
+
+【复制粘贴说明】
+- 软件取词后会自动恢复你原来的剪贴板，不影响正常复制
+- 复制A → 选中B → Ctrl+V，可直接把 B 替换成 A
+- 想复制选中的 B，再按一次 Ctrl+C 即可
 
 【退出】
-- 右键托盘图标 → 退出
-- 或 任务管理器结束 "悬浮翻译小星星.exe"
+- 右键托盘图标 → 退出小袁翻译
+- 或任务管理器结束 "小袁翻译.exe"
 
 【常见问题】
+- 蓝屏 SmartScreen 拦截？
+  → 点"更多信息" → "仍要运行"（未签名 exe 都会弹，正常）
+  → 若点了仍没反应，去杀软隔离区恢复并加白名单
+
 - 选中没反应？
-  → 请以管理员身份运行（右键 exe → 以管理员身份运行），部分软件会拦截剪贴板
-  → 确保真正拖选了文字（有蓝色背景），不是单击
+  → 请以管理员身份运行（右键 exe → 以管理员身份运行）
+  → 确保真正选中了文字（有蓝色背景），不是单击
 
 - 翻译失败？
-  → 检查网络，程序会自动从 Google 切换到 MyMemory 备用接口
-  → 首次翻译稍慢（1-2秒），属正常
+  → 点卡片左下 🔁 重试；检查网络（首次稍慢 1~2 秒正常）
+
+- 朗读没声？
+  → 按提示装对应语言包：设置 → 时间和语言 → 语言和区域 → 添加语言 → 勾选"语音"
+  → 联网时日语等会自动用在线语音，无需装包
 
 - 杀毒软件报毒？
-  → PyInstaller 打包的单文件 exe 偶尔误报，添加白名单即可，源码在 main.py 可自行审查
+  → PyInstaller 单文件偶尔误报，加白名单即可，源码 main.py 可自行审查
+  → GitHub Release 页可核对 SHA256
 
 - 开机自启？
-  → 按 Win+R 输入 shell:startup 回车，把 exe 快捷方式放进去
+  → Win+R 输入 shell:startup，把 exe 快捷方式放进去
+
+- 换头像？
+  → 正方形图改名 niulai.png 放 exe 同级目录，重启即生效
 
 【源码运行】
 pip install -r requirements.txt
 python main.py
+python main.py --main   （直接打开主窗口）
 
 【重新打包】
-pip install pyinstaller pystray Pillow
-pyinstaller --noconsole --onefile --name "悬浮翻译小星星" --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --collect-all="pynput" --collect-all="pystray" --collect-all="PIL" main.py
+pip install pyinstaller pystray Pillow pywin32
+pyinstaller --noconsole --onefile --name "小袁翻译" --icon "niulai.ico" --add-data "niulai.png;." main.py --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --hidden-import="win32com.client" --hidden-import="pystray._win32" --hidden-import="PIL.ImageTk" --hidden-import="PIL.PngImagePlugin" --hidden-import="PIL.JpegImagePlugin" --exclude-module="numpy" --exclude-module="matplotlib" --exclude-module="scipy" --exclude-module="pandas" --exclude-module="sklearn" --exclude-module="IPython" --exclude-module="notebook"
 
-工作目录：C:\Users\Administrator\Documents\Default Project\悬浮翻译小星星
-打包时间：见 exe 文件时间
-版本：v1.0 Python 3.12 + PyInstaller 6.22
+开源地址：https://github.com/yuanmzz/xiaoyuan-translator
+版本：v1.0 Python 3.12 + PyInstaller 6.22（UPX 瘦身版 21MB）

@@ -45,10 +45,10 @@ python main.py --main
 
 ```powershell
 pip install pyinstaller
-pyinstaller --noconsole --onefile --name "小袁翻译" --icon "niulai.ico" --add-data "niulai.png;." main.py --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --hidden-import="win32com.client" --hidden-import="pystray._win32" --hidden-import="PIL.ImageTk" --hidden-import="PIL.PngImagePlugin" --hidden-import="PIL.JpegImagePlugin" --exclude-module="numpy" --exclude-module="matplotlib" --exclude-module="scipy" --exclude-module="pandas" --exclude-module="sklearn" --exclude-module="IPython" --exclude-module="notebook"
+pyinstaller --noconsole --onefile --name "小袁翻译" --icon "niulai.ico" --add-data "niulai.png;." main.py --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --hidden-import="win32com.client" --hidden-import="pystray._win32" --hidden-import="PIL.ImageTk" --hidden-import="PIL.PngImagePlugin" --hidden-import="PIL.JpegImagePlugin" --exclude-module="numpy" --exclude-module="matplotlib" --exclude-module="scipy" --exclude-module="pandas" --exclude-module="sklearn" --exclude-module="IPython" --exclude-module="notebook" --exclude-module="setuptools" --exclude-module="pkg_resources" --exclude-module="cryptography" --exclude-module="pyreadline3" --exclude-module="defusedxml" --exclude-module="PIL.AvifImagePlugin" --exclude-module="PIL._avif" --exclude-module="PIL.WebPImagePlugin" --exclude-module="PIL._webp" --exclude-module="PIL.ImageCms" --exclude-module="PIL._imagingcms" --upx-dir "<UPX路径>"
 ```
 
-> 需要 UPX 可再加 `--upx-dir`，本仓库 Release 的 21MB 版即此参数打出。exe 走 GitHub Release 分发，不进 git。
+> UPX 官网下即可。Release 的 14MB 版即此参数打出（40MB → 21MB → 14MB 瘦身史：去 collect-all → UPX → 排除 setuptools/cryptography/AVIF 等死重）。exe 走 GitHub Release 分发，不进 git。
 
 ## 🎮 使用技巧
 

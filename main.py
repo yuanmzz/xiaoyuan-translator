@@ -2464,6 +2464,8 @@ class FloatingTranslatorApp:
         self.last_release_time = 0
         self.last_release_pos = (0, 0)
         self.last_try_time = 0
+        self._ctrl_down = False
+        self._ctrl_a_armed = False
         self.listener = None
         self.running = True
 
@@ -2502,6 +2504,74 @@ class FloatingTranslatorApp:
 
     def on_star_click(self, text, x, y):
         self.popup.show(text, x, y)
+
+    def _maybe_show_star(self, text, x, y):
+        """取词后统一过滤+弹星（鼠标/键盘两路共用）"""
+        try:
+            t = (text or "").strip()
+            # 宽松过滤：允许文件名、短句等；仅排除纯符号
+            if not (1 <= len(t) <= 1800):
+                return
+            # 只要有一个字母/汉字/数字就显示
+            if not re.search(r'[\u4e00-\u9fffA-Za-z0-9]', t):
+                return
+            # 去除多余空白但保留换行语义为空格
+            t = re.sub(r'\s+', ' ', t).strip()
+            # 太长截断
+            if len(t) > 600:
+                t = t[:600]
+            if t:
+                self.root.after(0, lambda: self.star.show(t, x, y))
+        except:
+            pass
+
+    def _point_in_own_windows(self, x, y):
+        """点是否落在自家窗口（星星/卡片/主窗口）内——是则不弹星，避免自扰"""
+        try:
+            if self._is_click_in_star(x, y) or self._is_click_in_popup(x, y):
+                return True
+        except:
+            pass
+        try:
+            mw = self.mainwin
+            if mw is not None and mw.win is not None and mw.win.winfo_exists():
+                try:
+                    if not mw.win.winfo_viewable():
+                        return False
+                except:
+                    return False
+                wx, wy = mw.win.winfo_x(), mw.win.winfo_y()
+                ww, wh = mw.win.winfo_width(), mw.win.winfo_height()
+                if wx <= x <= wx + ww and wy <= y <= wy + wh:
+                    return True
+        except:
+            pass
+        return False
+
+    def _fire_ctrl_a(self):
+        """Ctrl+A 全选：纯键盘操作鼠标监听看不到，用 UIA 在光标处读选区"""
+        try:
+            now = time.time()
+            if now - self.last_try_time < 0.28:
+                return
+            try:
+                mx, my = get_cursor_pos()
+            except:
+                return
+            if (mx == 0 and my == 0) or self._point_in_own_windows(mx, my):
+                return
+            self.last_try_time = now
+            def delayed_key(mx=mx, my=my):
+                time.sleep(0.15)
+                try:
+                    text = uia_get_selection(mx, my)
+                except:
+                    text = None
+                if text:
+                    self._maybe_show_star(text, mx, my)
+            threading.Thread(target=delayed_key, daemon=True).start()
+        except:
+            pass
 
     def show_main(self, text=None):
         # 托盘菜单/双击打开主窗口
@@ -2587,32 +2657,27 @@ class FloatingTranslatorApp:
                     should_try = False
                     # 拖选：>4px 即算（1个汉字也约6-8px）
                     if dx > 4 or dy > 4:
-                        if 0.07 < dt < 2.6:
+                        if 0.03 < dt < 2.6:
                             should_try = True
-                    # 双击选中单词（dx很小但有选区）
-                    elif is_double and 0.07 < dt < 1.5:
+                    # 双击/三击选中单词或整句（dx很小但有选区；三击按得快，下限放宽）
+                    elif is_double and 0.03 < dt < 1.5:
                         should_try = True
                     # 单击且在弹窗/星星内已在按下时return，不会到这里
 
                     if should_try:
                         self.last_try_time = now
                         # 延迟一点再取词，避免选区未稳定；UIA 无副作用，任何软件都安全
-                        def delayed(rx=x, ry=y):
+                        def delayed(rx=x, ry=y, px0=x0, py0=y0):
                             time.sleep(0.12)
                             text = uia_get_selection(rx, ry)
+                            if not text and (abs(rx - px0) > 4 or abs(ry - py0) > 4):
+                                # 松手落在行尾空白边距，回读选中起点
+                                try:
+                                    text = uia_get_selection(px0, py0)
+                                except:
+                                    text = None
                             if text:
-                                t = text.strip()
-                                # 宽松过滤：允许文件名、短句等；仅排除纯符号
-                                if 1 <= len(t) <= 1800:
-                                    # 只要有一个字母/汉字/数字就显示（比原来更宽松，解决文件选中不弹出）
-                                    if re.search(r'[\u4e00-\u9fffA-Za-z0-9]', t):
-                                        # 去除多余空白但保留换行语义为空格
-                                        t = re.sub(r'\s+', ' ', t).strip()
-                                        # 太长截断（文件名一般短）
-                                        if len(t) > 600:
-                                            t = t[:600]
-                                        self.root.after(0, lambda: self.star.show(t, rx, ry))
-                                        return
+                                self._maybe_show_star(text, rx, ry)
                             # 无有效文字不显示
                         threading.Thread(target=delayed, daemon=True).start()
                     self.mouse_down_pos = None
@@ -2648,12 +2713,47 @@ class FloatingTranslatorApp:
             on_scroll=self._on_scroll
         )
         self.listener.start()
-        # 键盘监听 Esc
+        # 键盘监听：Esc 关闭 + Ctrl+A 全选取词（纯键盘操作鼠标看不到）
         try:
+            _ctrl_keys = (pynput_keyboard.Key.ctrl, pynput_keyboard.Key.ctrl_l,
+                          pynput_keyboard.Key.ctrl_r)
+
+            def _is_a(k):
+                try:
+                    c = getattr(k, "char", None)
+                    return c in ("a", "A", "")
+                except:
+                    return False
+
             def on_key_press(key):
                 if key == pynput_keyboard.Key.esc:
                     self.root.after(0, lambda: (self.star.hide(), self.popup.hide()))
-            self.k_listener = pynput_keyboard.Listener(on_press=on_key_press)
+                    return
+                try:
+                    if key in _ctrl_keys:
+                        self._ctrl_down = True
+                        return
+                    if _is_a(key) and self._ctrl_down:
+                        self._ctrl_a_armed = True
+                except:
+                    pass
+
+            def on_key_release(key):
+                try:
+                    if key in _ctrl_keys:
+                        if self._ctrl_a_armed:
+                            self._ctrl_a_armed = False
+                            self._fire_ctrl_a()
+                        self._ctrl_down = False
+                        return
+                    if _is_a(key) and (self._ctrl_down or self._ctrl_a_armed):
+                        self._ctrl_a_armed = False
+                        self._fire_ctrl_a()
+                except:
+                    pass
+
+            self.k_listener = pynput_keyboard.Listener(on_press=on_key_press,
+                                                       on_release=on_key_release)
             self.k_listener.start()
         except:
             pass

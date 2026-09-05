@@ -239,9 +239,35 @@ def _uia_desktop_obj():
     return d
 
 
+def _uia_selection_text(el):
+    """单个 UIA 节点的选中文本；无选区/无模式返回 None"""
+    try:
+        iface = el.iface_text
+    except Exception:
+        return None
+    try:
+        sel = iface.GetSelection()
+    except Exception:
+        return None
+    try:
+        if sel.Length < 1:
+            return None
+    except Exception:
+        return None
+    try:
+        txt = sel.GetElement(0).GetText(-1)
+    except Exception:
+        return None
+    if not txt:
+        return None
+    return str(txt)
+
+
 def uia_get_selection(x, y, max_chars=1800):
     """用 UI Automation 读坐标处的选中文本；不碰剪贴板、不模拟按键。
-    CAD 画布等图形区没有文本选区，自然返回 None（有道们不捣乱的原理）。
+    从落点元素向上找 6 层祖先：链接词等碎片节点常无文本模式，
+    选区挂在段落/文档节点上。CAD 画布等图形区没有文本选区，
+    自然返回 None（有道们不捣乱的原理）。
     极少数不支持无障碍的老控件会返回 None，可用主窗口手动粘贴翻译。"""
     try:  # 工作线程需自带 COM 初始化，否则取不到任何东西
         import pythoncom
@@ -259,33 +285,36 @@ def uia_get_selection(x, y, max_chars=1800):
             el = desk.from_point(int(x), int(y))
         except Exception:
             return None
-        try:
-            iface = el.iface_text
-        except Exception:
-            return None
-        try:
-            sel = iface.GetSelection()
-        except Exception:
-            return None
-        try:
-            if sel.Length < 1:
-                return None
-        except Exception:
-            return None
-        try:
-            txt = sel.GetElement(0).GetText(-1)
-        except Exception:
-            return None
-        if not txt:
-            return None
-        txt = str(txt).strip()
-        if not txt:
-            return None
-        if len(txt) > max_chars:
-            txt = txt[:max_chars]
-        return txt
+        seen = set()
+        for _ in range(7):  # 自身 + 6 层祖先
+            if el is None:
+                break
+            try:
+                txt = _uia_selection_text(el)
+            except:
+                txt = None
+            if txt:
+                txt = txt.strip()
+                if txt:
+                    return txt[:max_chars] if len(txt) > max_chars else txt
+            try:
+                nxt = el.parent()
+            except:
+                break
+            if nxt is None:
+                break
+            try:
+                pid = id(nxt.element_info.element)
+            except:
+                pid = None
+            if pid is not None:
+                if pid in seen:
+                    break
+                seen.add(pid)
+            el = nxt
     except:
-        return None
+        pass
+    return None
 
 def set_clipboard_text(root: tk.Tk, text: str):
     try:

@@ -17,7 +17,7 @@
 - **28 种语言**：自动检测 / 中 / 英 / 日 / 韩 / 法 / 德 / 西 / 俄 / 维吾尔 / 藏 / 哈萨克…，下拉可任意互换，`⇄` 一键反向
 - **词典卡片**：音标（美/英）+ 简明释义 + 双语例句（有道免费词典，无 Key，失败自动降级为纯翻译）
 - **双喇叭朗读**：`🔊 原文` / `🔊 译文`，本地 SAPI → 在线免费语音 → 装包指引三级兜底；关窗即停读
-- **不劫持剪贴板**：取词后 85ms 内恢复你原来的复制内容，`复制A→选中B→粘贴` 可直接替换
+- **零打扰取词**：走系统无障碍接口（UIA）直接读选中文字，不碰剪贴板、不模拟按键——CAD/游戏里不会乱触发，也没有黑名单
 - **主窗口**：托盘右键 → 打开主窗口（词典式：输入 + 音标 + 简明/例句 + 历史 30 条，`Ctrl+Enter` 翻译）
 - **拟物毛玻璃风**：弹窗 + 主窗口统一浅色磨砂配色
 - **高分屏适配**：`SetProcessDpiAwareness`，多显示器兼容
@@ -45,7 +45,7 @@ python main.py --main
 
 ```powershell
 pip install pyinstaller
-pyinstaller --noconsole --onefile --name "小袁翻译" --icon "niulai.ico" --add-data "niulai.png;." main.py --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --hidden-import="win32com.client" --hidden-import="pystray._win32" --hidden-import="PIL.ImageTk" --hidden-import="PIL.PngImagePlugin" --hidden-import="PIL.JpegImagePlugin" --exclude-module="numpy" --exclude-module="matplotlib" --exclude-module="scipy" --exclude-module="pandas" --exclude-module="sklearn" --exclude-module="IPython" --exclude-module="notebook" --exclude-module="setuptools" --exclude-module="pkg_resources" --exclude-module="cryptography" --exclude-module="pyreadline3" --exclude-module="defusedxml" --exclude-module="PIL.AvifImagePlugin" --exclude-module="PIL._avif" --exclude-module="PIL.WebPImagePlugin" --exclude-module="PIL._webp" --exclude-module="PIL.ImageCms" --exclude-module="PIL._imagingcms" --upx-dir "<UPX路径>"
+pyinstaller --noconsole --onefile --name "小袁翻译" --icon "niulai.ico" --add-data "niulai.png;." main.py --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --hidden-import="win32com.client" --hidden-import="pystray._win32" --hidden-import="PIL.ImageTk" --hidden-import="PIL.PngImagePlugin" --hidden-import="PIL.JpegImagePlugin" --hidden-import="pywinauto" --hidden-import="comtypes" --hidden-import="comtypes.client" --hidden-import="comtypes.gen" --exclude-module="numpy" --exclude-module="matplotlib" --exclude-module="scipy" --exclude-module="pandas" --exclude-module="sklearn" --exclude-module="IPython" --exclude-module="notebook" --exclude-module="setuptools" --exclude-module="pkg_resources" --exclude-module="cryptography" --exclude-module="pyreadline3" --exclude-module="defusedxml" --exclude-module="PIL.AvifImagePlugin" --exclude-module="PIL._avif" --exclude-module="PIL.WebPImagePlugin" --exclude-module="PIL._webp" --exclude-module="PIL.ImageCms" --exclude-module="PIL._imagingcms" --upx-dir "<UPX路径>"
 ```
 
 > UPX 官网下即可。Release 的 14MB 版即此参数打出（40MB → 21MB → 14MB 瘦身史：去 collect-all → UPX → 排除 setuptools/cryptography/AVIF 等死重）。exe 走 GitHub Release 分发，不进 git。
@@ -68,7 +68,7 @@ pyinstaller --noconsole --onefile --name "小袁翻译" --icon "niulai.ico" --ad
 ## 🔧 原理
 
 ```text
-pynput.mouse.Listener 监听拖选/双击 → 模拟 Ctrl+C 取词 → 剪贴板 85ms 内恢复
+pynput.mouse.Listener 监听拖选/双击 → UIA 无障碍接口读选中文本（零剪贴板/按键副作用）
     ↓
 StarWindow (Toplevel, overrideredirect, transparentcolor + PIL 硬边缘抠图) 淡入
     ↓ 点击
@@ -80,7 +80,7 @@ TranslatePopup 异步翻译：
 
 ## ❓ 常见问题
 
-- **选中没反应？** 管理员权限运行的软件会拦截模拟按键，请同样以管理员身份运行；浏览器里请确保真正选中（蓝底）而非单击。CAD 类软件（AutoCAD/中望/浩辰等）默认禁用自动取词（`Ctrl+C` 会触发 COPYCLIP），名单在 `NO_AUTO_COPY_EXES` 可自行增删；要翻译请用主窗口。
+- **选中没反应？** 浏览器里请确保真正选中（蓝底）而非单击；极少数不支持无障碍接口的老控件取不到词，请用主窗口手动粘贴。CAD 画布是图形区、无文本选区所以不会弹牛来（也不会触发 COPYCLIP），CAD 文字编辑框内选中则正常翻译。
 - **翻译失败？** 点卡片左下 `🔁 重试`；三链路都失败多为网络问题。
 - **朗读没声？** 按喇叭后的指引装对应语言包即可；日语等无包语言联网会自动用在线语音。
 - **牛来位置偏移？** `StarWindow.show()` 里微调 `px/py`。

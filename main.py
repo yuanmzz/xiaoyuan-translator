@@ -32,7 +32,6 @@ except ImportError:
 
 try:
     from pynput import mouse as pynput_mouse, keyboard as pynput_keyboard
-    from pynput.keyboard import Controller as KeyController, Key
     HAS_PYNPUT = True
 except ImportError:
     HAS_PYNPUT = False
@@ -220,65 +219,73 @@ def get_clipboard_text(root: tk.Tk):
     except:
         return ""
 
-def get_clipboard_seq():
-    """获取剪贴板序列号，用于检测是否变化（无需清空）"""
-    try:
-        return ctypes.windll.user32.GetClipboardSequenceNumber()
-    except:
-        return 0
+# ---------- UIA 无副作用取词（有道同原理：不碰剪贴板、不模拟按键） ----------
+# CAD 画布等图形区没有文本选区，自然返回 None，所以任何软件都不会被打扰，
+# 也不需要维护黑名单。极少数不支持无障碍的老控件取不到，可用主窗口手动粘贴。
 
-# 这些软件里禁用自动取词：模拟 Ctrl+C 会劫持人家快捷键
-# （如 CAD 把 Ctrl+C 当 COPYCLIP，会打断画图；且选的多为图形对象，取了也没用）
-# 要加软件：任务管理器 → 进程右键“打开文件位置”，把 exe 名小写加进来
-NO_AUTO_COPY_EXES = frozenset({
-    "acad.exe",            # AutoCAD
-    "accoreconsole.exe",   # AutoCAD 内核
-    "zwcad.exe",           # 中望CAD
-    "gcad.exe",            # 浩辰CAD
-    "gstarcad.exe",
-    "bricscad.exe",        # BricsCAD
-    "draftsight.exe",      # DraftSight
-    "freecad.exe",         # FreeCAD
-    "caxa.exe",            # CAXA
-})
-NO_AUTO_COPY_PREFIX = ("caxa", "zwcad", "acad", "gcad")
+_uia_local = threading.local()
 
-def get_foreground_exe():
-    """当前前台窗口的进程 exe 名（小写），失败返回空串"""
-    try:
-        import os
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
-        if not hwnd:
-            return ""
-        pid = ctypes.wintypes.DWORD()
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if not pid.value:
-            return ""
-        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid.value)  # QUERY_LIMITED_INFORMATION
-        if not h:
-            return ""
+
+def _uia_desktop_obj():
+    # Desktop 按线程缓存：COM 对象必须在创建线程使用
+    d = getattr(_uia_local, "desk", None)
+    if d is None:
         try:
-            buf = ctypes.create_unicode_buffer(260)
-            size = ctypes.wintypes.DWORD(260)
-            if ctypes.windll.kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
-                return os.path.basename(buf.value).lower()
-        finally:
-            ctypes.windll.kernel32.CloseHandle(h)
+            from pywinauto import Desktop
+            d = Desktop(backend="uia")
+            _uia_local.desk = d
+        except:
+            return None
+    return d
+
+
+def uia_get_selection(x, y, max_chars=1800):
+    """用 UI Automation 读坐标处的选中文本；不碰剪贴板、不模拟按键。
+    CAD 画布等图形区没有文本选区，自然返回 None（有道们不捣乱的原理）。
+    极少数不支持无障碍的老控件会返回 None，可用主窗口手动粘贴翻译。"""
+    try:  # 工作线程需自带 COM 初始化，否则取不到任何东西
+        import pythoncom
+        try:
+            pythoncom.CoInitialize()
+        except:
+            pass
     except:
         pass
-    return ""
-
-def in_blocked_app():
-    """当前是否在禁用自动取词的软件里"""
     try:
-        exe = get_foreground_exe()
-        if not exe:
-            return False
-        if exe in NO_AUTO_COPY_EXES:
-            return True
-        return exe.startswith(NO_AUTO_COPY_PREFIX)
+        desk = _uia_desktop_obj()
+        if desk is None:
+            return None
+        try:
+            el = desk.from_point(int(x), int(y))
+        except Exception:
+            return None
+        try:
+            iface = el.iface_text
+        except Exception:
+            return None
+        try:
+            sel = iface.GetSelection()
+        except Exception:
+            return None
+        try:
+            if sel.Length < 1:
+                return None
+        except Exception:
+            return None
+        try:
+            txt = sel.GetElement(0).GetText(-1)
+        except Exception:
+            return None
+        if not txt:
+            return None
+        txt = str(txt).strip()
+        if not txt:
+            return None
+        if len(txt) > max_chars:
+            txt = txt[:max_chars]
+        return txt
     except:
-        return False
+        return None
 
 def set_clipboard_text(root: tk.Tk, text: str):
     try:
@@ -2457,7 +2464,6 @@ class FloatingTranslatorApp:
         self.last_release_time = 0
         self.last_release_pos = (0, 0)
         self.last_try_time = 0
-        self.key_controller = KeyController() if HAS_PYNPUT else None
         self.listener = None
         self.running = True
 
@@ -2505,94 +2511,6 @@ class FloatingTranslatorApp:
             self.mainwin.show(text)
         except Exception as e:
             _log("打开主窗口失败:", e)
-
-    def _simulate_copy(self):
-        """模拟 Ctrl+C 并读取新剪贴板 - 完全不劫持版"""
-        if not HAS_PYNPUT:
-            return None
-        # 若用户正按着 Ctrl（正在 Ctrl+C/V），不要劫持
-        try:
-            if ctypes.windll.user32.GetKeyState(0x11) & 0x8000 or ctypes.windll.user32.GetKeyState(0xA2) & 0x8000 or ctypes.windll.user32.GetKeyState(0xA3) & 0x8000:
-                return None
-        except:
-            pass
-        # 保存旧剪贴板和序列号（不清空）
-        try:
-            old = get_clipboard_text(self.root)
-        except:
-            old = ""
-        old_strip = old.strip() if old else ""
-        old_seq = get_clipboard_seq()
-        time.sleep(0.015)
-        # 用更轻量的 SendInput 模拟，避免 pynput 长时间按住 Ctrl 导致快捷键失灵
-        try:
-            # 优先用 ctypes keybd_event，释放更可靠
-            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)
-            time.sleep(0.018)
-            ctypes.windll.user32.keybd_event(0x43, 0, 0, 0)
-            time.sleep(0.022)
-            ctypes.windll.user32.keybd_event(0x43, 0, 2, 0)
-            time.sleep(0.015)
-            ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)
-            time.sleep(0.01)
-            # 确保 Ctrl 完全释放（防止卡住）
-            ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)
-        except:
-            try:
-                self.key_controller.press(Key.ctrl)
-                time.sleep(0.018)
-                self.key_controller.press('c')
-                time.sleep(0.022)
-                self.key_controller.release('c')
-                time.sleep(0.015)
-                self.key_controller.release(Key.ctrl)
-            except:
-                pass
-        # 轮询
-        got_t = None
-        for i in range(5):
-            time.sleep(0.065 if i == 0 else 0.055)
-            try:
-                new = get_clipboard_text(self.root)
-                new_seq = get_clipboard_seq()
-            except:
-                new = ""
-                new_seq = old_seq
-            if new and new.strip():
-                t = new.strip()
-                if not (1 <= len(t) <= 3000):
-                    continue
-                if new_seq != old_seq or t != old_strip:
-                    got_t = t
-                    break
-        if got_t:
-            # 立即同步恢复（不用 after 延迟，避免 Ctrl+V 时机撞上空档）
-            if old and old_strip and got_t != old_strip:
-                try:
-                    # 直接用 win32 恢复，不走 tkinter（可在后台线程同步执行）
-                    import win32clipboard
-                    # 重试打开
-                    for _ in range(3):
-                        try:
-                            win32clipboard.OpenClipboard()
-                            win32clipboard.EmptyClipboard()
-                            win32clipboard.SetClipboardText(old, win32clipboard.CF_UNICODETEXT)
-                            win32clipboard.CloseClipboard()
-                            break
-                        except:
-                            try:
-                                win32clipboard.CloseClipboard()
-                            except:
-                                pass
-                            time.sleep(0.015)
-                except:
-                    # 备用用 tkinter 异步
-                    try:
-                        self.root.after(0, lambda: set_clipboard_text(self.root, old))
-                    except:
-                        pass
-            return got_t
-        return None
 
     def _is_click_in_popup(self, x, y):
         """判断点击是否在翻译卡片内"""
@@ -2677,15 +2595,11 @@ class FloatingTranslatorApp:
                     # 单击且在弹窗/星星内已在按下时return，不会到这里
 
                     if should_try:
-                        # CAD 等软件里不取词：模拟 Ctrl+C 会触发人家快捷键（如 COPYCLIP）
-                        if in_blocked_app():
-                            self.mouse_down_pos = None
-                            return
                         self.last_try_time = now
-                        # 延迟一点再取词，避免选区未稳定
+                        # 延迟一点再取词，避免选区未稳定；UIA 无副作用，任何软件都安全
                         def delayed(rx=x, ry=y):
                             time.sleep(0.12)
-                            text = self._simulate_copy()
+                            text = uia_get_selection(rx, ry)
                             if text:
                                 t = text.strip()
                                 # 宽松过滤：允许文件名、短句等；仅排除纯符号
@@ -2752,8 +2666,8 @@ class FloatingTranslatorApp:
             err.title("缺少依赖")
             err.geometry("380x160+600+400")
             err.attributes("-topmost", True)
-            tk.Label(err, text="缺少 pynput / requests", font=("Microsoft YaHei UI", 11, "bold"), fg="#DC2626").pack(pady=12)
-            tk.Label(err, text="请先运行：\npip install pynput requests", font=("Consolas", 10), justify="left").pack(pady=6)
+            tk.Label(err, text="缺少依赖", font=("Microsoft YaHei UI", 11, "bold"), fg="#DC2626").pack(pady=12)
+            tk.Label(err, text="请先运行：\npip install -r requirements.txt", font=("Consolas", 10), justify="left").pack(pady=6)
             tk.Label(err, text="安装后重新运行 main.py", font=("Microsoft YaHei UI", 9), fg="#6B7280").pack(pady=4)
             self.root.deiconify()
             self.root.mainloop()
@@ -2764,6 +2678,14 @@ class FloatingTranslatorApp:
 
         # 启动监听
         self.start_mouse_listener()
+
+        # 后台预热 UIA（首次选中不卡）；缺 pywinauto 则自动取词不可用，主窗口可用
+        def _warm():
+            try:
+                import pywinauto  # noqa
+            except:
+                pass
+        threading.Thread(target=_warm, daemon=True).start()
 
         # 系统托盘（可选）
         self._try_tray()

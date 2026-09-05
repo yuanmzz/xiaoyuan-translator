@@ -227,6 +227,59 @@ def get_clipboard_seq():
     except:
         return 0
 
+# 这些软件里禁用自动取词：模拟 Ctrl+C 会劫持人家快捷键
+# （如 CAD 把 Ctrl+C 当 COPYCLIP，会打断画图；且选的多为图形对象，取了也没用）
+# 要加软件：任务管理器 → 进程右键“打开文件位置”，把 exe 名小写加进来
+NO_AUTO_COPY_EXES = frozenset({
+    "acad.exe",            # AutoCAD
+    "accoreconsole.exe",   # AutoCAD 内核
+    "zwcad.exe",           # 中望CAD
+    "gcad.exe",            # 浩辰CAD
+    "gstarcad.exe",
+    "bricscad.exe",        # BricsCAD
+    "draftsight.exe",      # DraftSight
+    "freecad.exe",         # FreeCAD
+    "caxa.exe",            # CAXA
+})
+NO_AUTO_COPY_PREFIX = ("caxa", "zwcad", "acad", "gcad")
+
+def get_foreground_exe():
+    """当前前台窗口的进程 exe 名（小写），失败返回空串"""
+    try:
+        import os
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        pid = ctypes.wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid.value)  # QUERY_LIMITED_INFORMATION
+        if not h:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = ctypes.wintypes.DWORD(260)
+            if ctypes.windll.kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return os.path.basename(buf.value).lower()
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    except:
+        pass
+    return ""
+
+def in_blocked_app():
+    """当前是否在禁用自动取词的软件里"""
+    try:
+        exe = get_foreground_exe()
+        if not exe:
+            return False
+        if exe in NO_AUTO_COPY_EXES:
+            return True
+        return exe.startswith(NO_AUTO_COPY_PREFIX)
+    except:
+        return False
+
 def set_clipboard_text(root: tk.Tk, text: str):
     try:
         root.clipboard_clear()
@@ -2624,6 +2677,10 @@ class FloatingTranslatorApp:
                     # 单击且在弹窗/星星内已在按下时return，不会到这里
 
                     if should_try:
+                        # CAD 等软件里不取词：模拟 Ctrl+C 会触发人家快捷键（如 COPYCLIP）
+                        if in_blocked_app():
+                            self.mouse_down_pos = None
+                            return
                         self.last_try_time = now
                         # 延迟一点再取词，避免选区未稳定
                         def delayed(rx=x, ry=y):

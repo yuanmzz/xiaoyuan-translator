@@ -506,7 +506,8 @@ class Translator:
             pass
         return res
 
-    def _split_chunks(self, text, limit=800):
+    def _split_chunks(self, text, limit=450):
+        # 450：CJK 长 URL 安全线内，且 MyMemory（上限~450）也能参与兜底
         if len(text) <= limit:
             return [text]
         # 按句子边界切分
@@ -527,13 +528,163 @@ class Translator:
             chunks.append(cur)
         return chunks or [text]
 
+    @staticmethod
+    def _script_class(ch):
+        o = ord(ch)
+        if 0x3040 <= o <= 0x30FF or 0xFF61 <= o <= 0xFF9F:
+            return "kana"
+        if 0x4E00 <= o <= 0x9FFF:
+            return "han"
+        if 0x41 <= o <= 0x5A or 0x61 <= o <= 0x7A or 0xC0 <= o <= 0x24F:
+            return "lat"
+        if 0xAC00 <= o <= 0xD7AF or 0x1100 <= o <= 0x11FF:
+            return "hangul"
+        if 0x0400 <= o <= 0x04FF:
+            return "cyrl"
+        if 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F:
+            return "arab"
+        if 0x0E00 <= o <= 0x0E7F:
+            return "thai"
+        if 0x0900 <= o <= 0x097F:
+            return "deva"
+        if 0x0F00 <= o <= 0x0FFF:
+            return "tibt"
+        return None  # 中性字符（空格/标点/数字）：不参与语种判定，贴着当前段走
+
+    # span 断句标点（中日文逗顿也要断，否则中文从句会被并入日语 span 整段吞掉）
+    SPAN_BREAK_PUNCT = frozenset("。、！？!?\n；;…")
+
+    @classmethod
+    def _has_multi_script(cls, text):
+        classes = set()
+        for ch in text:
+            c = cls._script_class(ch)
+            if c:
+                classes.add(c)
+                if len(classes) >= 2:
+                    return True
+        return False
+
+    def _split_spans(self, text):
+        """按书写系统 + 断句标点切 span：kana 聚团不断开（日语上下文完整），
+        中文从句在，。处断开保留。返回 [(kinds set, segment)]"""
+        runs, cur_cls, cur = [], None, ""
+        for ch in text:
+            c = self._script_class(ch)
+            if c is None:
+                cur += ch
+                continue
+            if cur_cls is None:
+                cur_cls = c
+            if c != cur_cls and cur:
+                runs.append((cur_cls, cur))
+                cur, cur_cls = "", c
+            elif c != cur_cls:
+                cur_cls = c
+            cur += ch
+        if cur:
+            runs.append((cur_cls or "other", cur))
+        spans, cur_kinds, cur = [], set(), ""
+        for cls_name, seg in runs or [("other", text)]:
+            if cls_name not in (None, "other"):
+                cur_kinds.add(cls_name)
+            cur += seg
+            if seg and seg[-1] in self.SPAN_BREAK_PUNCT:
+                spans.append((set(cur_kinds), cur))
+                cur_kinds, cur = set(), ""
+        if cur:
+            spans.append((set(cur_kinds), cur))
+        return spans or [(set(), text)]
+
+    @staticmethod
+    def _latin_term_keep(seg):
+        # 拉丁片段像术语则保留：无内部空格，或字母太少
+        s = seg.strip()
+        if " " not in s:
+            return True
+        return len(re.findall(r"[A-Za-z]", s)) < 8
+
+    def _span_action(self, kinds, seg, tgt):
+        """单个 span 决策：返回 None=保留原文，否则返回源语种"""
+        if not kinds:
+            return None
+        if "kana" in kinds:
+            return None if tgt == "ja" else "ja"
+        if "hangul" in kinds:
+            return None if tgt == "ko" else "auto"
+        if "cyrl" in kinds:
+            return None if tgt in ("ru", "uk", "kk", "ky") else "auto"
+        if "arab" in kinds:
+            return None if tgt in ("ar", "fa", "ur", "ug") else "auto"
+        if "thai" in kinds:
+            return None if tgt == "th" else "auto"
+        if "deva" in kinds:
+            return None if tgt == "hi" else "auto"
+        if "tibt" in kinds:
+            return None
+        if "lat" not in kinds:  # 纯汉字
+            return None if tgt == "zh" else "auto"
+        if "han" not in kinds:  # 纯拉丁
+            if tgt != "zh":
+                return "auto"
+            return None if self._latin_term_keep(seg) else "auto"
+        # 汉拉混合：中文目标整体保留（防术语损坏），其他目标整段 auto
+        return None if tgt == "zh" else "auto"
+
+    def _translate_mixed(self, text, tgt):
+        """混排文本按 span 处理：各语种段带上下文翻译，术语/原文段保留。
+        相邻同动作 span 合并为一次请求（长纯外语段≈整段一次，不会轰炸接口）。
+        返回 None 表示无实质翻译，调用方继续走常规链路。"""
+        try:
+            spans = self._split_spans(text)
+            if not spans:
+                return None
+            groups = []  # [sl_or_None, segment]
+            for kinds, seg in spans:
+                try:
+                    sl = self._span_action(kinds, seg, tgt)
+                except:
+                    sl = None
+                if groups and groups[-1][0] == sl:
+                    groups[-1][1] += seg
+                else:
+                    groups.append([sl, seg])
+            out = []
+            changed = False
+            for sl, seg in groups:
+                if sl is None:
+                    out.append(seg)
+                    continue
+                try:
+                    r = self._translate_single_core(seg, sl, tgt)
+                except:
+                    r = None
+                if not r or r.startswith("[") or r == seg:
+                    out.append(seg)  # 失败/无变化就保留原文，绝不拼接报错信息
+                else:
+                    out.append(r)
+                    changed = True
+            if not changed:
+                return None
+            return "".join(out)
+        except:
+            return None
+
     def _translate_single(self, text, src, tgt):
+        # 混排先分段（整段 auto 易被多数语种带偏而吞内容）；纯文本直走链路
+        if src == "auto" and self._has_multi_script(text):
+            mixed = self._translate_mixed(text, tgt)
+            if mixed:
+                return mixed
+            # 无实质翻译则继续常规链路兜底
+        return self._translate_single_core(text, src, tgt)
+
+    def _translate_single_core(self, text, src, tgt):
         # 链路1: dict-chrome-ex (clients5, 实测不吃 429, 支持 auto)
         res = self._dict_chrome(text, src, tgt)
-        if res:
-            return res
-        # 链路2: Google GTX
-        res = self._google_gtx(text, src, tgt)
+        if not res:
+            # 链路2: Google GTX
+            res = self._google_gtx(text, src, tgt)
         if res:
             return res
         # 链路3: MyMemory (不支持auto，需精准猜测源语言，避免日语被误判为中文导致 zh|zh)

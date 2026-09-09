@@ -316,6 +316,33 @@ def uia_get_selection(x, y, max_chars=1800):
         pass
     return None
 
+def get_clipboard_seq():
+    """剪贴板序列号（只读，用于观察用户自己的复制，不触碰内容）"""
+    try:
+        return ctypes.windll.user32.GetClipboardSequenceNumber()
+    except:
+        return 0
+
+
+def clipboard_has_files():
+    """剪贴板是否为文件（CF_HDROP=15），是则不弹星"""
+    try:
+        import win32clipboard
+        try:
+            win32clipboard.OpenClipboard()
+            try:
+                return bool(win32clipboard.IsClipboardFormatAvailable(15))
+            finally:
+                try:
+                    win32clipboard.CloseClipboard()
+                except:
+                    pass
+        except:
+            return False
+    except:
+        return False
+
+
 def set_clipboard_text(root: tk.Tk, text: str):
     try:
         root.clipboard_clear()
@@ -2495,6 +2522,7 @@ class FloatingTranslatorApp:
         self.last_try_time = 0
         self._ctrl_down = False
         self._ctrl_a_armed = False
+        self._clip_last_seq = 0
         self.listener = None
         self.running = True
 
@@ -2610,6 +2638,49 @@ class FloatingTranslatorApp:
             self.mainwin.show(text)
         except Exception as e:
             _log("打开主窗口失败:", e)
+
+    def _clip_poll_once(self):
+        """剪贴板观察：用户自己复制了文字就在光标处弹星。返回 True 表示已弹。"""
+        try:
+            seq = get_clipboard_seq()
+        except:
+            return False
+        if seq == self._clip_last_seq:
+            return False
+        self._clip_last_seq = seq
+        try:
+            if clipboard_has_files():
+                return False
+            text = get_clipboard_text(self.root)
+        except:
+            return False
+        if not text or not text.strip():
+            return False
+        try:
+            mx, my = get_cursor_pos()
+        except:
+            return False
+        if (mx == 0 and my == 0) or self._point_in_own_windows(mx, my):
+            return False
+        try:
+            self.last_try_time = time.time()
+        except:
+            pass
+        self._maybe_show_star(text, mx, my)
+        return True
+
+    def _clip_watch(self):
+        # 只观察序列号，不读内容；用户复制动作才读一次，不干扰任何软件
+        try:
+            self._clip_last_seq = get_clipboard_seq()
+        except:
+            self._clip_last_seq = 0
+        while getattr(self, "running", True):
+            time.sleep(0.35)
+            try:
+                self._clip_poll_once()
+            except:
+                pass
 
     def _is_click_in_popup(self, x, y):
         """判断点击是否在翻译卡片内"""
@@ -2815,6 +2886,8 @@ class FloatingTranslatorApp:
             except:
                 pass
         threading.Thread(target=_warm, daemon=True).start()
+        # 剪贴板观察（复制即现）：只看序列号，用户复制才读一次
+        threading.Thread(target=self._clip_watch, daemon=True).start()
 
         # 系统托盘（可选）
         self._try_tray()
@@ -2875,8 +2948,28 @@ class FloatingTranslatorApp:
                 self.root.after(0, self.root.quit)
             def on_open(icon, item):
                 self.root.after(0, self.show_main)
+
+            def on_elevate(icon, item):
+                # 以管理员身份重启（目标软件也是管理员权限时用，如某些企业端）
+                try:
+                    import sys
+                    if getattr(sys, "frozen", False):
+                        ret = ctypes.windll.shell32.ShellExecuteW(
+                            None, "runas", sys.executable, None, None, 1)
+                    else:
+                        import os
+                        base = os.path.dirname(os.path.abspath(__file__))
+                        ret = ctypes.windll.shell32.ShellExecuteW(
+                            None, "runas", sys.executable,
+                            f'"{os.path.join(base, "main.py")}"', None, 1)
+                    if int(ret) > 32:
+                        icon.stop()
+                        self.root.after(0, self.root.quit)
+                except:
+                    pass
             menu = pystray.Menu(
                 pystray.MenuItem("打开主窗口", on_open, default=True),
+                pystray.MenuItem("以管理员身份重启", on_elevate),
                 pystray.MenuItem("退出小袁翻译", on_quit),
             )
             icon = pystray.Icon("xiaoyuan_translator", create_image(), "小袁翻译", menu)

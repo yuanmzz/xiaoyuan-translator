@@ -1104,6 +1104,185 @@ def _safe_set_widget(widget, **kw):
         pass
 
 
+SHADOW_MARGIN = 26  # 投影留边（同时是卡片在窗口里的四周留白）
+
+# Win32 常量（分层阴影窗口用）
+_WS_EX_LAYERED = 0x00080000
+_WS_EX_TRANSPARENT = 0x00000020
+_WS_EX_NOACTIVATE = 0x08000000
+_WS_EX_TOOLWINDOW = 0x00000080
+_WS_POPUP = 0x80000000
+_SW_HIDE = 0
+_SW_SHOWNOACTIVATE = 4
+_ULW_ALPHA = 2
+_SWP_NOMOVE = 0x0002
+_SWP_NOSIZE = 0x0001
+_SWP_NOACTIVATE = 0x0010
+_SWP_SHOWWINDOW = 0x0040
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _SIZE(ctypes.Structure):
+    _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+
+class _BLENDFUNCTION(ctypes.Structure):
+    _fields_ = [("BlendOp", ctypes.c_byte), ("BlendFlags", ctypes.c_byte),
+                ("SourceConstantAlpha", ctypes.c_byte), ("AlphaFormat", ctypes.c_byte)]
+
+
+class _BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", ctypes.c_ulong), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                ("biPlanes", ctypes.c_ushort), ("biBitCount", ctypes.c_ushort),
+                ("biCompression", ctypes.c_ulong), ("biSizeImage", ctypes.c_ulong),
+                ("biXPelsPerMeter", ctypes.c_long), ("biYPelsPerMeter", ctypes.c_long),
+                ("biClrUsed", ctypes.c_ulong), ("biClrImportant", ctypes.c_ulong)]
+
+
+class _BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BITMAPINFOHEADER), ("bmiColors", ctypes.c_ulong * 3)]
+
+
+def _shadow_rgba(w, h, margin=None, radius=12, blur=8, opacity=110, dy=3):
+    """真·半透明软阴影（RGBA）：给分层窗口用。
+    Tk 的 transparentcolor 是二值抠洞，做不了渐变——灰影淡出会变成实心白像素（白壳）。"""
+    from PIL import Image, ImageDraw, ImageFilter
+    if margin is None:
+        margin = SHADOW_MARGIN
+    S = 2  # 超采样
+    W, H = w + margin * 2, h + margin * 2
+    sh = Image.new("L", (W * S, H * S), 0)
+    ImageDraw.Draw(sh).rounded_rectangle(
+        [margin * S, (margin + dy) * S, (margin + w) * S - 1, (margin + dy + h) * S - 1],
+        radius=radius * S, fill=opacity)
+    sh = sh.filter(ImageFilter.GaussianBlur(blur * S)).resize((W, H), Image.LANCZOS)
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    color = Image.new("RGBA", (W, H), (28, 32, 40, 255))
+    color.putalpha(sh)
+    return color
+
+
+class _NativeShadow:
+    """独立 Win32 分层窗口画阴影：逐像素 alpha，任何背景上都自然（含深色桌面）。
+    Tk 窗口（卡片）保持 transparentcolor，阴影垫在它下面，拖动时跟随。"""
+
+    def __init__(self):
+        self.hwnd = None
+        self._size = (0, 0)
+        self._hdc_screen = None
+        self._hdc_mem = None
+        self._hbmp = None
+        self._old_bmp = None
+        self._alpha = 1.0
+
+    def _ensure(self):
+        if self.hwnd:
+            return True
+        try:
+            hwnd = ctypes.windll.user32.CreateWindowExW(
+                _WS_EX_LAYERED | _WS_EX_TRANSPARENT | _WS_EX_NOACTIVATE | _WS_EX_TOOLWINDOW,
+                "Static", "xy_shadow", _WS_POPUP, 0, 0, 10, 10, None, None, None, None)
+            if not hwnd:
+                return False
+            self.hwnd = hwnd
+            return True
+        except:
+            return False
+
+    def set_size(self, W, H, w, h):
+        """按卡片尺寸生成阴影位图（尺寸不变则复用）"""
+        if self._size == (W, H) or not self._ensure():
+            return
+        from PIL import Image, ImageChops
+        img = _shadow_rgba(w, h)
+        # 预乘 alpha → BGRA（Windows ULW 要求）
+        r, g, b, a = img.split()
+        r = ImageChops.multiply(r, a)
+        g = ImageChops.multiply(g, a)
+        b = ImageChops.multiply(b, a)
+        data = Image.merge("RGBA", (b, g, r, a)).tobytes()
+        gdi = ctypes.windll.gdi32
+        user32 = ctypes.windll.user32
+        self._release_dib()
+        self._hdc_screen = user32.GetDC(None)
+        self._hdc_mem = gdi.CreateCompatibleDC(self._hdc_screen)
+        bmi = _BITMAPINFO()
+        bmi.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+        bmi.bmiHeader.biWidth = W
+        bmi.bmiHeader.biHeight = -H  # top-down
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 32
+        bmi.bmiHeader.biCompression = 0
+        bits = ctypes.c_void_p()
+        self._hbmp = gdi.CreateDIBSection(self._hdc_mem, ctypes.byref(bmi), 0,
+                                         ctypes.byref(bits), None, 0)
+        ctypes.memmove(bits, data, len(data))
+        self._old_bmp = gdi.SelectObject(self._hdc_mem, self._hbmp)
+        self._size = (W, H)
+
+    def _release_dib(self):
+        try:
+            gdi = ctypes.windll.gdi32
+            if self._hdc_mem and self._old_bmp:
+                gdi.SelectObject(self._hdc_mem, self._old_bmp)
+            if self._hbmp:
+                gdi.DeleteObject(self._hbmp)
+            if self._hdc_mem:
+                gdi.DeleteDC(self._hdc_mem)
+            if self._hdc_screen:
+                ctypes.windll.user32.ReleaseDC(None, self._hdc_screen)
+        except:
+            pass
+        self._hdc_mem = self._hdc_screen = self._hbmp = self._old_bmp = None
+
+    def _paint(self, x, y):
+        if not self.hwnd or not self._hdc_mem:
+            return
+        self._last_xy = (int(x), int(y))
+        W, H = self._size
+        blend = _BLENDFUNCTION(0, 0, int(255 * max(0.0, min(1.0, self._alpha))), 1)
+        pt_dst = _POINT(int(x), int(y))
+        sz = _SIZE(W, H)
+        pt_src = _POINT(0, 0)
+        ctypes.windll.user32.UpdateLayeredWindow(
+            self.hwnd, self._hdc_screen, ctypes.byref(pt_dst), ctypes.byref(sz),
+            self._hdc_mem, ctypes.byref(pt_src), 0, ctypes.byref(blend), _ULW_ALPHA)
+
+    def show(self, x, y, W, H, w, h, below_hwnd=None):
+        if not self._ensure():
+            return
+        self.set_size(W, H, w, h)
+        self._paint(x, y)
+        ctypes.windll.user32.ShowWindow(self.hwnd, _SW_SHOWNOACTIVATE)
+        if below_hwnd:
+            # 压到卡片窗口正下方（阴影从卡片透明留白区透出来）
+            ctypes.windll.user32.SetWindowPos(
+                self.hwnd, below_hwnd, 0, 0, 0, 0,
+                _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_SHOWWINDOW)
+
+    def move(self, x, y):
+        if self.hwnd and self._hdc_mem:
+            self._paint(x, y)
+
+    def set_alpha(self, a):
+        self._alpha = a
+        self._paint(*getattr(self, "_last_xy", (0, 0)))
+
+    @property
+    def alive(self):
+        return bool(self.hwnd) and bool(self._hdc_mem)
+
+    def hide(self):
+        try:
+            if self.hwnd:
+                ctypes.windll.user32.ShowWindow(self.hwnd, _SW_HIDE)
+        except:
+            pass
+
+
 def _cow_photo(size=32):
     """牛来标题栏图标（主窗口用），找不到返回 None"""
     try:
@@ -1600,6 +1779,8 @@ class TranslatePopup:
         self.speaker = Speaker(root, translator,
                                on_restore=self._tts_restore_btn,
                                on_missing=self._missing_voice_hint)
+        # 真·半透明阴影（独立分层窗口，垫在卡片下面）
+        self.shadow = _NativeShadow()
 
     def _create_window(self):
         if self.win:
@@ -1614,8 +1795,9 @@ class TranslatePopup:
         self.win.attributes("-transparentcolor", "#000001")
         # 卡片容器 - 毛玻璃拟物风
         CARD = "#FDFDFE"
-        self.card = tk.Frame(self.win, bg=CARD, bd=0, highlightthickness=0)
-        self.card.pack(padx=7, pady=7)
+        self.card = tk.Frame(self.win, bg=CARD, bd=0, highlightthickness=1,
+                             highlightbackground="#E4E8EE")
+        self.card.pack(padx=SHADOW_MARGIN, pady=SHADOW_MARGIN)
         # 顶部标题栏 - 多语言选择（通栏胶囊）
         header = tk.Frame(self.card, bg="#F4F6FB")
         header.pack(fill="x", padx=12, pady=(12, 0))
@@ -1713,6 +1895,10 @@ class TranslatePopup:
         x = e.x_root - self._drag_x
         y = e.y_root - self._drag_y
         self.win.geometry(f"+{x}+{y}")
+        try:
+            self.shadow.move(x, y)
+        except:
+            pass
 
     def _on_lang_change(self):
         # 下拉改变后重新翻译
@@ -1777,28 +1963,33 @@ class TranslatePopup:
         threading.Thread(target=self._do_translate, daemon=True).start()
 
     def _position_window(self, x, y, initial=False):
-        self.win.update_idletasks()
-        w = self.win.winfo_reqwidth()
-        h = self.win.winfo_reqheight()
-        # 限制宽度 380
-        w = max(320, min(400, w))
-        # 目标：鼠标选中文字上方 40px
-        px = x - w // 2
-        py = y - h - 48
+        self.card.update_idletasks()
+        w = self.card.winfo_reqwidth()
+        h = self.card.winfo_reqheight()
+        M = SHADOW_MARGIN  # 投影留边，与 pack padx/pady 一致
+        W, H = w + M * 2, h + M * 2
+        # 目标：鼠标选中文字上方 48px
+        px = x - W // 2
+        py = y - H - 48
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         if px < 12:
             px = 12
-        if px + w > sw - 12:
-            px = sw - w - 12
+        if px + W > sw - 12:
+            px = sw - W - 12
         if py < 12:
             # 放下方
             py = y + 32
-        if py + h > sh - 12:
-            py = sh - h - 12
-        self.win.geometry(f"{w}x{h}+{px}+{py}")
-        # 小三角指针（用label模拟）
-        # 不额外画，保持简洁，卡片下方加阴影即可
+        if py + H > sh - 12:
+            py = sh - H - 12
+        self.win.geometry(f"{W}x{H}+{px}+{py}")
+        # 同步阴影（垫在卡片窗下面）
+        try:
+            self.win.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(int(self.win.winfo_id())) or int(self.win.winfo_id())
+            self.shadow.show(px, py, W, H, w, h, below_hwnd=hwnd)
+        except:
+            pass
 
     def _fade_in(self, alpha=0.0):
         alpha += 0.18
@@ -1807,9 +1998,17 @@ class TranslatePopup:
                 self.win.attributes("-alpha", 1.0)
             except:
                 pass
+            try:
+                self.shadow.set_alpha(1.0)
+            except:
+                pass
             return
         try:
             self.win.attributes("-alpha", alpha)
+            try:
+                self.shadow.set_alpha(alpha)
+            except:
+                pass
             self.root.after(16, lambda: self._fade_in(alpha))
         except:
             pass
@@ -1997,6 +2196,10 @@ class TranslatePopup:
         # 关窗即停读
         try:
             self._tts_stop()
+        except:
+            pass
+        try:
+            self.shadow.hide()
         except:
             pass
         if self.win:

@@ -3331,8 +3331,43 @@ class FloatingTranslatorApp:
         except:
             print("提示：关闭窗口或 Ctrl+C 退出。安装 pystray+ pillow 可启用系统托盘。")
 
+_single_instance_mutex = None
+
+
+def ensure_single_instance(show_msg=True):
+    """单实例守卫：已有实例在跑则返回 False（顺带解释为什么会冒出一堆牛来）。
+    XY_SINGLE_INSTANCE=0 可跳过（仅测试用）。"""
+    global _single_instance_mutex
+    try:
+        import os
+        if os.environ.get("XY_SINGLE_INSTANCE", "") == "0":
+            return True
+        kernel32 = ctypes.windll.kernel32
+        mutex = kernel32.CreateMutexW(None, False, "XiaoYuanTranslator_SingleInstance_v1")
+        if not mutex:
+            return True  # 拿不到句柄就不拦
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(mutex)
+            if show_msg:
+                try:
+                    ctypes.windll.user32.MessageBoxW(
+                        None,
+                        "小袁翻译已经在运行了（去托盘找牛来图标）。\n"
+                        "新开的这个自动退出——不然每次复制会弹出好几个牛来。",
+                        "小袁翻译", 0x40)
+                except:
+                    pass
+            return False
+        _single_instance_mutex = mutex  # 持有，不释放
+        return True
+    except:
+        return True
+
+
 if __name__ == "__main__":
     import sys as _sys
+    if not ensure_single_instance():
+        _sys.exit(0)
     app = FloatingTranslatorApp()
     if len(_sys.argv) > 1 and _sys.argv[1].lower() in ("--main", "-m", "main"):
         # 快捷方式目标加 --main 可直接打开主窗口
